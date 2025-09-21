@@ -35,7 +35,7 @@ print("\n合并后的列名:")
 print(fiscal_merged.columns.tolist())
 
 # 保存合并后的数据
-output_file = 'e:/Study/2-1/finance_analysis/lecture_2/lecture2_coding_copilot/fiscal/fiscal_merged.xlsx'
+output_file = 'e:/Study/2-1/finance_analysis/lecture_2/lecture2_coding_copilot/national_data_analysis/fiscal_merged.xlsx'
 fiscal_merged.to_excel(output_file, index=False)
 print(f"\n合并后的数据已保存至: {output_file}")
 

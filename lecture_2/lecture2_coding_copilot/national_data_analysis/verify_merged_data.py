@@ -1,7 +1,7 @@
 import pandas as pd
 
 # 读取合并后的数据
-merged_file = 'e:/Study/2-1/finance_analysis/lecture_2/lecture2_coding_copilot/fiscal/fiscal_merged.xlsx'
+merged_file = 'e:/Study/2-1/finance_analysis/lecture_2/lecture2_coding_copilot/national_data_analysis/fiscal_merged.xlsx'
 print("读取合并后的数据...")
 fiscal_merged = pd.read_excel(merged_file)
 
