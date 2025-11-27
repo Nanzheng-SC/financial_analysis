@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RNN歌词生成器</title>
+    <style>
+        body {
+            font-family: 'Microsoft YaHei', Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input, textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            width: 100%;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        .result {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #e9f7ef;
+            border-radius: 5px;
+            white-space: pre-wrap;
+        }
+        .loading {
+            text-align: center;
+            color: #666;
+        }
+        .error {
+            color: #d32f2f;
+            background-color: #ffebee;
+            padding: 15px;
+            border-radius: 5px;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎵 RNN歌词生成器</h1>
+        <p>基于循环神经网络的歌词自动生成系统</p>
+        
+        <div class="form-group">
+            <label for="seed_text">种子文本:</label>
+            <input type="text" id="seed_text" value="春天" placeholder="输入种子文本...">
+        </div>
+        
+        <div class="form-group">
+            <label for="length">生成长度:</label>
+            <input type="number" id="length" value="100" min="10" max="500" placeholder="生成字符数...">
+        </div>
+        
+        <div class="form-group">
+            <label for="temperature">温度参数:</label>
+            <input type="number" id="temperature" value="1.0" step="0.1" min="0.1" max="2.0" placeholder="控制创造性...">
+        </div>
+        
+        <button id="generate_btn" onclick="generateLyrics()">生成歌词</button>
+        
+        <div id="loading" class="loading" style="display: none;">
+            正在生成歌词，请稍候...
+        </div>
+        
+        <div id="result" class="result" style="display: none;"></div>
+        
+        <div id="error" class="error" style="display: none;"></div>
+    </div>
+
+    <script>
+        async function generateLyrics() {
+            // 获取输入值
+            const seedText = document.getElementById('seed_text').value || '春天';
+            const length = parseInt(document.getElementById('length').value) || 100;
+            const temperature = parseFloat(document.getElementById('temperature').value) || 1.0;
+            
+            // 验证输入
+            if (length < 10 || length > 500) {
+                showError('生成长度必须在10-500之间');
+                return;
+            }
+            
+            if (temperature < 0.1 || temperature > 2.0) {
+                showError('温度参数必须在0.1-2.0之间');
+                return;
+            }
+            
+            // 显示加载状态
+            showLoading();
+            
+            try {
+                // 发送请求到后端
+                const response = await fetch('/generate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        seed_text: seedText,
+                        length: length,
+                        temperature: temperature
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    showResult(result.lyrics);
+                } else {
+                    showError(result.error);
+                }
+            } catch (error) {
+                showError('网络错误: ' + error.message);
+            }
+        }
+        
+        function showLoading() {
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('result').style.display = 'none';
+            document.getElementById('error').style.display = 'none';
+            document.getElementById('generate_btn').disabled = true;
+        }
+        
+        function showResult(lyrics) {
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('result').style.display = 'block';
+            document.getElementById('result').textContent = lyrics;
+            document.getElementById('generate_btn').disabled = false;
+        }
+        
+        function showError(message) {
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('error').style.display = 'block';
+            document.getElementById('error').textContent = '错误: ' + message;
+            document.getElementById('generate_btn').disabled = false;
+        }
+        
+        // 允许按Enter键生成
+        document.addEventListener('keypress', function(event) {
+            if (event.key === 'Enter' && !document.getElementById('generate_btn').disabled) {
+                generateLyrics();
+            }
+        });
+    </script>
+</body>
+</html>
