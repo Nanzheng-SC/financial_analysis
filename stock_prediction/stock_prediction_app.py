@@ -723,16 +723,6 @@ def create_visualizations(stock_df, stock_name):
     )
     
     # 5. K线图
-    # 创建hovertext列表
-    hover_text = []
-    for i in range(len(stock_df)):
-        date = stock_df.iloc[i]['trade_date']
-        open_price = stock_df.iloc[i]['open']
-        high_price = stock_df.iloc[i]['high']
-        low_price = stock_df.iloc[i]['low']
-        close_price = stock_df.iloc[i]['close']
-        hover_text.append(f"日期: {date}<br>开盘: ¥{open_price:.2f}<br>最高: ¥{high_price:.2f}<br>最低: ¥{low_price:.2f}<br>收盘: ¥{close_price:.2f}")
-    
     fig5 = go.Figure(data=[go.Candlestick(
         x=stock_df['trade_date'],
         open=stock_df['open'],
@@ -742,7 +732,7 @@ def create_visualizations(stock_df, stock_name):
         name='K线',
         increasing_line_color='#FF4B4B',  # 上涨为红色
         decreasing_line_color='#28A745',  # 下跌为绿色
-        hovertext=hover_text
+        hovertemplate='日期: %{x}<br>开盘: ¥%{open:.2f}<br>最高: ¥%{high:.2f}<br>最低: ¥%{low:.2f}<br>收盘: ¥%{close:.2f}'
     )])
     
     # 更新K线图布局
