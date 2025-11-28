@@ -129,9 +129,19 @@ with st.sidebar:
     st.markdown("⚠️ **注意：** 预测结果仅供参考，不构成投资建议")
 
 # 调用大模型进行预测的函数
+@st.cache_data(ttl=1800, show_spinner=False)  # 缓存30分钟，减少API调用频率
 def predict_stock_trend(stock_df, stock_name, stock_code, prediction_days):
     """
     使用Doubao API预测股票走势，失败时使用本地预测备用方案
+    
+    参数:
+    - stock_df: 股票历史数据
+    - stock_name: 股票名称
+    - stock_code: 股票代码
+    - prediction_days: 预测天数
+    
+    返回:
+    - 预测结果字典
     """
     def local_prediction_fallback():
         """本地预测备用方案"""
@@ -258,16 +268,23 @@ def predict_stock_trend(stock_df, stock_name, stock_code, prediction_days):
             st.warning("豆包API配置不完整，将使用本地预测备用方案")
             return local_prediction_fallback()
         
-        # 发送请求
-        completion = client.chat.completions.create(
-            model="doubao-1-5-pro-32k-250115",  # 使用官方推荐的模型
-            messages=[
-                {"role": "system", "content": "你是一位顶尖的量化金融分析师，精通技术分析、统计模型和市场行为分析。请提供客观、理性、数据驱动的分析，避免情绪化表达。严格按照要求的JSON格式输出结果，确保数据准确性和格式规范性。"},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.3,
-            max_tokens=1000
-        )
+        # 发送请求，添加超时控制
+        try:
+            completion = client.chat.completions.create(
+                model="doubao-1-5-pro-32k-250115",  # 使用官方推荐的模型
+                messages=[
+                    {"role": "system", "content": "你是一位顶尖的量化金融分析师，精通技术分析、统计模型和市场行为分析。请提供客观、理性、数据驱动的分析，避免情绪化表达。严格按照要求的JSON格式输出结果，确保数据准确性和格式规范性。"},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,
+                max_tokens=1000,
+                timeout=30  # 设置30秒超时
+            )
+        except Exception as api_error:
+            error_msg = f"API调用超时或失败: {str(api_error)}"
+            print(error_msg)
+            st.warning(f"{error_msg}，将使用本地预测备用方案")
+            return local_prediction_fallback()
         
         # 提取预测结果
         prediction_text = completion.choices[0].message.content
@@ -314,51 +331,165 @@ def predict_stock_trend(stock_df, stock_name, stock_code, prediction_days):
         # 使用本地预测备用方案
         return local_prediction_fallback()
 
+# 生成模拟股票数据的函数
+def generate_mock_stock_data(stock_code, start_date, end_date):
+    """
+    生成模拟股票数据作为备用方案
+    
+    参数:
+    - stock_code: 股票代码
+    - start_date: 开始日期
+    - end_date: 结束日期
+    
+    返回:
+    - 模拟数据框, 模拟股票名称, 显示代码
+    """
+    # 解析日期
+    start = pd.to_datetime(start_date)
+    end = pd.to_datetime(end_date)
+    
+    # 生成日期序列（工作日）
+    date_range = pd.bdate_range(start=start, end=end)
+    
+    # 创建模拟数据
+    np.random.seed(int(stock_code[-4:]) if stock_code[-4:].isdigit() else 42)  # 使用股票代码后四位作为随机种子保证一致性
+    
+    # 模拟开盘价（从某个基础价格开始，添加随机波动）
+    base_price = 100.0
+    prices = [base_price]
+    for _ in range(len(date_range) - 1):
+        # 添加一个小的随机波动，模拟股票价格变化
+        change = np.random.normal(0, 2)  # 均值为0，标准差为2的正态分布
+        new_price = max(prices[-1] + change, 10.0)  # 确保价格不会太低
+        prices.append(new_price)
+    
+    # 创建DataFrame
+    df = pd.DataFrame({
+        'trade_date': date_range,
+        'open': prices,
+        'close': [p * (1 + np.random.uniform(-0.02, 0.02)) for p in prices],  # 收盘价在开盘价基础上有±2%的波动
+        'high': [max(o, c) * (1 + np.random.uniform(0, 0.01)) for o, c in zip(prices, [p * (1 + np.random.uniform(-0.02, 0.02)) for p in prices])],  # 最高价略高于开盘或收盘价
+        'low': [min(o, c) * (1 - np.random.uniform(0, 0.01)) for o, c in zip(prices, [p * (1 + np.random.uniform(-0.02, 0.02)) for p in prices])],  # 最低价略低于开盘或收盘价
+        'vol': np.random.randint(100000, 10000000, size=len(date_range)),  # 随机成交量
+        'amount': np.random.uniform(1000000, 100000000, size=len(date_range))  # 随机成交额
+    })
+    
+    # 计算涨跌幅
+    df['pct_chg'] = df['close'].pct_change() * 100
+    
+    # 计算均线
+    df['ma5'] = df['close'].rolling(window=5).mean()
+    df['ma10'] = df['close'].rolling(window=10).mean()
+    df['vol_ma5'] = df['vol'].rolling(window=5).mean()
+    
+    # 计算技术指标
+    df['volatility'] = df['high'] - df['low']
+    df['price_change'] = df['close'] - df['open']
+    
+    # 模拟股票名称
+    mock_names = [
+        "模拟科技", "模拟金融", "模拟医药", "模拟消费", "模拟能源",
+        "模拟地产", "模拟制造", "模拟通信", "模拟汽车", "模拟航空"
+    ]
+    stock_name = f"{mock_names[int(stock_code[-1]) % len(mock_names)]}{stock_code}"
+    
+    return df, stock_name, stock_code
+
 # 获取股票数据的函数
-@st.cache_data(ttl=3600)  # 缓存1小时，减少API调用频率
-def get_stock_data(stock_code, start_date, end_date):
+@st.cache_data(ttl=3600, show_spinner=False)  # 缓存1小时，减少API调用频率
+def get_stock_data(stock_code, start_date, end_date, max_retries=2):
     """
-    使用tushare获取股票历史数据
+    使用tushare获取股票历史数据，添加重试机制和超时控制
+    
+    参数:
+    - stock_code: 股票代码
+    - start_date: 开始日期
+    - end_date: 结束日期
+    - max_retries: 最大重试次数
+    
+    返回:
+    - 数据框, 股票名称, 显示代码
     """
-    try:
-        # 处理股票代码格式，添加市场后缀
-        display_code = stock_code  # 保存原始代码用于显示
-        
-        # 根据股票代码前缀判断市场并添加后缀
-        if not (stock_code.endswith('.SH') or stock_code.endswith('.SZ')):
-            if stock_code.startswith('6'):
-                stock_code = f"{stock_code}.SH"  # 上海市场
-            elif stock_code.startswith(('0', '3')):
-                stock_code = f"{stock_code}.SZ"  # 深圳市场
-        
-        # 获取股票基本信息
-        stock_basic = tushare_api.stock_basic(ts_code=stock_code, fields='name')
-        stock_name = stock_basic['name'].values[0] if not stock_basic.empty else '未知股票'
-        
-        # 获取日线数据
-        df = tushare_api.daily(ts_code=stock_code, start_date=start_date, end_date=end_date)
-        if df.empty:
-            st.error(f"未找到股票 {display_code} 的数据，请检查股票代码是否正确")
-            return None, None, None
-        
-        # 数据处理
-        df['trade_date'] = pd.to_datetime(df['trade_date'])
-        df = df.sort_values('trade_date')
-        
-        # 计算基本指标
-        df['pct_chg'] = df['close'].pct_change() * 100  # 涨跌幅百分比
-        df['ma5'] = df['close'].rolling(window=5).mean()  # 5日均线
-        df['ma10'] = df['close'].rolling(window=10).mean()  # 10日均线
-        df['vol_ma5'] = df['vol'].rolling(window=5).mean()  # 5日成交量均线
-        
-        # 添加技术指标
-        df['volatility'] = df['high'] - df['low']  # 波动率（最高价-最低价）
-        df['price_change'] = df['close'] - df['open']  # 价格变动
-        
-        return df, stock_name, display_code
-    except Exception as e:
-        st.error(f"获取股票数据时出错: {str(e)}")
-        return None, None, None
+    import socket
+    # 设置全局socket超时
+    original_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(10)  # 设置10秒socket超时
+    
+    retry_count = 0
+    last_error = None
+    
+    while retry_count <= max_retries:
+        try:
+            # 处理股票代码格式，添加市场后缀
+            display_code = stock_code  # 保存原始代码用于显示
+            
+            # 根据股票代码前缀判断市场并添加后缀
+            if not (stock_code.endswith('.SH') or stock_code.endswith('.SZ')):
+                if stock_code.startswith('6'):
+                    stock_code = f"{stock_code}.SH"  # 上海市场
+                elif stock_code.startswith(('0', '3')):
+                    stock_code = f"{stock_code}.SZ"  # 深圳市场
+            
+            # 获取股票基本信息（添加try/except块）
+            try:
+                stock_basic = tushare_api.stock_basic(ts_code=stock_code, fields='name')
+                stock_name = stock_basic['name'].values[0] if not stock_basic.empty else '未知股票'
+            except Exception as e:
+                st.warning(f"获取股票基本信息失败: {str(e)}，使用默认名称")
+                stock_name = f"{display_code}股票"
+            
+            # 获取日线数据（添加try/except块）
+            try:
+                df = tushare_api.daily(ts_code=stock_code, start_date=start_date, end_date=end_date)
+            except Exception as e:
+                st.error(f"获取股票日线数据失败: {str(e)}")
+                socket.setdefaulttimeout(original_timeout)  # 恢复原始超时设置
+                return None, None, None
+            if df.empty:
+                st.error(f"未找到股票 {display_code} 的数据，请检查股票代码是否正确")
+                socket.setdefaulttimeout(original_timeout)  # 恢复原始超时设置
+                return None, None, None
+            
+            # 数据处理
+            df['trade_date'] = pd.to_datetime(df['trade_date'])
+            df = df.sort_values('trade_date')
+            
+            # 计算基本指标
+            df['pct_chg'] = df['close'].pct_change() * 100  # 涨跌幅百分比
+            df['ma5'] = df['close'].rolling(window=5).mean()  # 5日均线
+            df['ma10'] = df['close'].rolling(window=10).mean()  # 10日均线
+            df['vol_ma5'] = df['vol'].rolling(window=5).mean()  # 5日成交量均线
+            
+            # 添加技术指标
+            df['volatility'] = df['high'] - df['low']  # 波动率（最高价-最低价）
+            df['price_change'] = df['close'] - df['open']  # 价格变动
+            
+            socket.setdefaulttimeout(original_timeout)  # 恢复原始超时设置
+            return df, stock_name, display_code
+            
+        except socket.timeout:
+            retry_count += 1
+            last_error = "网络连接超时"
+            if retry_count <= max_retries:
+                st.warning(f"获取股票数据超时，正在尝试第{retry_count}次重试...")
+                time.sleep(2)  # 等待2秒后重试
+            continue
+        except Exception as e:
+            retry_count += 1
+            last_error = str(e)
+            if retry_count <= max_retries:
+                st.warning(f"获取股票数据出错: {str(e)}，正在尝试第{retry_count}次重试...")
+                time.sleep(2)  # 等待2秒后重试
+            continue
+    
+    # 所有重试都失败，使用模拟数据作为备用方案
+    error_msg = f"在{max_retries+1}次尝试后仍无法获取股票数据: {last_error}"
+    st.warning(f"{error_msg}\n将使用模拟数据进行展示，请注意这不是真实数据！")
+    print(error_msg)
+    socket.setdefaulttimeout(original_timeout)  # 恢复原始超时设置
+    
+    # 生成并返回模拟数据
+    return generate_mock_stock_data(stock_code, start_date, end_date)
 
 # 主内容区
 main_container = st.container()
