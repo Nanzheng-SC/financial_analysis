@@ -408,7 +408,7 @@ def get_stock_data(stock_code, start_date, end_date, max_retries=2):
     - max_retries: 最大重试次数
     
     返回:
-    - 数据框, 股票名称, 显示代码
+    - 数据框, 股票名称, 显示代码, 股票基本信息字典
     """
     import socket
     # 设置全局socket超时
@@ -417,6 +417,16 @@ def get_stock_data(stock_code, start_date, end_date, max_retries=2):
     
     retry_count = 0
     last_error = None
+    
+    # 初始化基本信息字典
+    stock_info = {
+        'name': '未知股票',
+        'industry': '未知',
+        'area': '未知',
+        'market': '未知',
+        'list_date': '未知',
+        'status': '未知'
+    }
     
     while retry_count <= max_retries:
         try:
@@ -427,15 +437,24 @@ def get_stock_data(stock_code, start_date, end_date, max_retries=2):
             if not (stock_code.endswith('.SH') or stock_code.endswith('.SZ')):
                 if stock_code.startswith('6'):
                     stock_code = f"{stock_code}.SH"  # 上海市场
+                    stock_info['market'] = '上海证券交易所'
                 elif stock_code.startswith(('0', '3')):
                     stock_code = f"{stock_code}.SZ"  # 深圳市场
+                    stock_info['market'] = '深圳证券交易所'
             
             # 获取股票基本信息（添加try/except块）
             try:
-                stock_basic = tushare_api.stock_basic(ts_code=stock_code, fields='name')
-                stock_name = stock_basic['name'].values[0] if not stock_basic.empty else '未知股票'
+                # 扩展fields参数获取更多信息：名称、行业、地域、上市日期、状态
+                stock_basic = tushare_api.stock_basic(ts_code=stock_code, fields='name,industry,area,list_date,status')
+                if not stock_basic.empty:
+                    stock_info['name'] = stock_basic['name'].values[0] if 'name' in stock_basic.columns else '未知股票'
+                    stock_info['industry'] = stock_basic['industry'].values[0] if 'industry' in stock_basic.columns else '未知'
+                    stock_info['area'] = stock_basic['area'].values[0] if 'area' in stock_basic.columns else '未知'
+                    stock_info['list_date'] = stock_basic['list_date'].values[0] if 'list_date' in stock_basic.columns else '未知'
+                    stock_info['status'] = '上市' if (stock_basic['status'].values[0] == 'L' if 'status' in stock_basic.columns else True) else '退市'
+                stock_name = stock_info['name']
             except Exception as e:
-                st.warning(f"获取股票基本信息失败: {str(e)}，使用默认名称")
+                st.warning(f"获取股票基本信息失败: {str(e)}，使用默认信息")
                 stock_name = f"{display_code}股票"
             
             # 获取日线数据（添加try/except块）
@@ -444,7 +463,7 @@ def get_stock_data(stock_code, start_date, end_date, max_retries=2):
             except Exception as e:
                 st.error(f"获取股票日线数据失败: {str(e)}")
                 socket.setdefaulttimeout(original_timeout)  # 恢复原始超时设置
-                return None, None, None
+                return None, None, None, stock_info
             if df.empty:
                 st.error(f"未找到股票 {display_code} 的数据，请检查股票代码是否正确")
                 socket.setdefaulttimeout(original_timeout)  # 恢复原始超时设置
@@ -465,7 +484,7 @@ def get_stock_data(stock_code, start_date, end_date, max_retries=2):
             df['price_change'] = df['close'] - df['open']  # 价格变动
             
             socket.setdefaulttimeout(original_timeout)  # 恢复原始超时设置
-            return df, stock_name, display_code
+            return df, stock_name, display_code, stock_info
             
         except socket.timeout:
             retry_count += 1
@@ -489,7 +508,14 @@ def get_stock_data(stock_code, start_date, end_date, max_retries=2):
     socket.setdefaulttimeout(original_timeout)  # 恢复原始超时设置
     
     # 生成并返回模拟数据
-    return generate_mock_stock_data(stock_code, start_date, end_date)
+    df, stock_name, display_code = generate_mock_stock_data(stock_code, start_date, end_date)
+    # 为模拟数据添加基本信息
+    stock_info['name'] = stock_name
+    stock_info['industry'] = '模拟行业'
+    stock_info['area'] = '模拟地区'
+    stock_info['list_date'] = '20000101'
+    stock_info['status'] = '上市'
+    return df, stock_name, display_code, stock_info
 
 # 主内容区
 main_container = st.container()
@@ -637,16 +663,53 @@ def create_visualizations(stock_df, stock_name):
         hovertemplate='波动率: %{x:.2f}%<br>涨跌幅: %{y:.2f}%'
     ))
     
-    # 添加趋势线
-    z = np.polyfit(stock_df['relative_volatility'], stock_df['pct_chg'], 1)
-    p = np.poly1d(z)
-    fig4.add_trace(go.Scatter(
-        x=stock_df['relative_volatility'],
-        y=p(stock_df['relative_volatility']),
-        mode='lines',
-        name='趋势线',
-        line=dict(color='blue', width=1.5, dash='dash')
-    ))
+    # 添加趋势线（添加数据验证和错误处理）
+    try:
+        # 过滤掉NaN值和无穷大值
+        valid_data = stock_df[
+            stock_df['relative_volatility'].notna() & 
+            stock_df['pct_chg'].notna() &
+            ~stock_df['relative_volatility'].isin([np.inf, -np.inf]) &
+            ~stock_df['pct_chg'].isin([np.inf, -np.inf])
+        ].copy()
+        
+        # 检查是否有足够的数据点
+        if len(valid_data) >= 3:  # 至少需要3个数据点
+            # 添加异常值过滤（使用IQR方法）
+            Q1_vol = valid_data['relative_volatility'].quantile(0.25)
+            Q3_vol = valid_data['relative_volatility'].quantile(0.75)
+            IQR_vol = Q3_vol - Q1_vol
+            
+            Q1_pct = valid_data['pct_chg'].quantile(0.25)
+            Q3_pct = valid_data['pct_chg'].quantile(0.75)
+            IQR_pct = Q3_pct - Q1_pct
+            
+            # 过滤异常值
+            filtered_data = valid_data[
+                (valid_data['relative_volatility'] >= Q1_vol - 1.5 * IQR_vol) &
+                (valid_data['relative_volatility'] <= Q3_vol + 1.5 * IQR_vol) &
+                (valid_data['pct_chg'] >= Q1_pct - 1.5 * IQR_pct) &
+                (valid_data['pct_chg'] <= Q3_pct + 1.5 * IQR_pct)
+            ]
+            
+            # 再次检查数据点数量
+            if len(filtered_data) >= 3:
+                # 计算趋势线
+                z = np.polyfit(filtered_data['relative_volatility'], filtered_data['pct_chg'], 1)
+                p = np.poly1d(z)
+                
+                # 添加趋势线到图表
+                fig4.add_trace(go.Scatter(
+                    x=sorted(filtered_data['relative_volatility']),
+                    y=p(sorted(filtered_data['relative_volatility'])),
+                    mode='lines',
+                    name='趋势线',
+                    line=dict(color='blue', width=1.5, dash='dash')
+                ))
+    except Exception as e:
+        # 如果趋势线计算失败，记录错误但不影响整体图表显示
+        print(f"计算趋势线失败: {str(e)}")
+        # 不添加趋势线，保持散点图
     
     # 更新布局
     fig4.update_layout(
@@ -660,6 +723,16 @@ def create_visualizations(stock_df, stock_name):
     )
     
     # 5. K线图
+    # 创建hovertext列表
+    hover_text = []
+    for i in range(len(stock_df)):
+        date = stock_df.iloc[i]['trade_date']
+        open_price = stock_df.iloc[i]['open']
+        high_price = stock_df.iloc[i]['high']
+        low_price = stock_df.iloc[i]['low']
+        close_price = stock_df.iloc[i]['close']
+        hover_text.append(f"日期: {date}<br>开盘: ¥{open_price:.2f}<br>最高: ¥{high_price:.2f}<br>最低: ¥{low_price:.2f}<br>收盘: ¥{close_price:.2f}")
+    
     fig5 = go.Figure(data=[go.Candlestick(
         x=stock_df['trade_date'],
         open=stock_df['open'],
@@ -669,7 +742,7 @@ def create_visualizations(stock_df, stock_name):
         name='K线',
         increasing_line_color='#FF4B4B',  # 上涨为红色
         decreasing_line_color='#28A745',  # 下跌为绿色
-        hovertemplate='日期: %{x}<br>开盘: ¥%{open:.2f}<br>最高: ¥%{high:.2f}<br>最低: ¥%{low:.2f}<br>收盘: ¥%{close:.2f}'
+        hovertext=hover_text
     )])
     
     # 更新K线图布局
@@ -696,10 +769,46 @@ if predict_button:
             start_date = (datetime.now() - timedelta(days=history_days)).strftime('%Y%m%d')
             
             # 获取股票数据
-            stock_df, stock_name, display_code = get_stock_data(stock_code, start_date, end_date)
+            stock_df, stock_name, display_code, stock_info = get_stock_data(stock_code, start_date, end_date)
             
             if stock_df is not None:
                 st.success(f"成功获取 {stock_name}({display_code}) 的历史数据")
+                
+                # 显示股票基本信息卡片
+                st.markdown("### 🏢 股票基本信息")
+                
+                # 创建基本信息卡片
+                col1, col2, col3 = st.columns(3)
+                
+                # 计算状态颜色
+                status_color = 'green' if stock_info['status'] == '上市' else 'red'
+                
+                with col1:
+                    st.markdown(f"""<div style='background-color: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 4px solid #007bff;'>
+                        <h5 style='margin-top: 0; color: #007bff;'>📈 股票信息</h5>
+                        <p><strong>股票名称:</strong> {stock_name}</p>
+                        <p><strong>股票代码:</strong> {display_code}</p>
+                        <p><strong>上市状态:</strong> <span style='color: {status_color};'>{stock_info['status']}</span></p>
+                    </div>""", unsafe_allow_html=True)
+                
+                with col2:
+                    st.markdown(f"""<div style='background-color: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 4px solid #28a745;'>
+                        <h5 style='margin-top: 0; color: #28a745;'>🏭 行业信息</h5>
+                        <p><strong>所属行业:</strong> {stock_info['industry']}</p>
+                        <p><strong>所在地区:</strong> {stock_info['area']}</p>
+                        <p><strong>上市交易所:</strong> {stock_info['market']}</p>
+                    </div>""", unsafe_allow_html=True)
+                
+                with col3:
+                    st.markdown(f"""<div style='background-color: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 4px solid #ffc107;'>
+                        <h5 style='margin-top: 0; color: #ffc107;'>📅 上市信息</h5>
+                        <p><strong>上市日期:</strong> {stock_info['list_date']}</p>
+                        <p><strong>数据周期:</strong> {history_days}天</p>
+                        <p><strong>更新时间:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+                    </div>""", unsafe_allow_html=True)
+                
+                # 添加分隔线
+                st.divider()
                 
                 # 显示数据概览
                 st.markdown("### 📊 股票数据概览")
