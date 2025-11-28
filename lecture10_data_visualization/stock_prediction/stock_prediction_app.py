@@ -99,9 +99,6 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# 股票基本信息展示区域
-stock_info_container = st.container()
-
 # 侧边栏
 with st.sidebar:
     st.header("🔧 参数设置")
@@ -317,42 +314,6 @@ def predict_stock_trend(stock_df, stock_name, stock_code, prediction_days):
         # 使用本地预测备用方案
         return local_prediction_fallback()
 
-# 获取股票基本信息的函数
-@st.cache_data(ttl=3600)  # 缓存1小时，减少API调用频率
-def get_stock_info(stock_code):
-    """
-    获取股票的详细基本信息，包括ts_code, symbol, name, area, industry, fullname, market, exchange, list_status, list_date等
-    """
-    try:
-        # 处理股票代码格式，添加市场后缀
-        display_code = stock_code  # 保存原始代码用于显示
-        
-        # 根据股票代码前缀判断市场并添加后缀
-        if not (stock_code.endswith('.SH') or stock_code.endswith('.SZ')):
-            if stock_code.startswith('6'):
-                stock_code = f"{stock_code}.SH"  # 上海市场
-            elif stock_code.startswith(('0', '3')):
-                stock_code = f"{stock_code}.SZ"  # 深圳市场
-        
-        # 获取股票基本信息，包括所有需要的字段
-        fields = 'ts_code,symbol,name,area,industry,fullname,market,exchange,list_status,list_date'
-        stock_info = tushare_api.stock_basic(ts_code=stock_code, fields=fields)
-        
-        if stock_info.empty:
-            st.error(f"未找到股票 {display_code} 的基本信息，请检查股票代码是否正确")
-            return None, None, display_code
-        
-        # 将结果转换为字典格式便于使用
-        stock_info_dict = stock_info.iloc[0].to_dict()
-        
-        # 获取股票名称（用于显示）
-        stock_name = stock_info_dict.get('name', '未知股票')
-        
-        return stock_info_dict, stock_name, display_code
-    except Exception as e:
-        st.error(f"获取股票基本信息时出错: {str(e)}")
-        return None, None, None
-
 # 获取股票数据的函数
 @st.cache_data(ttl=3600)  # 缓存1小时，减少API调用频率
 def get_stock_data(stock_code, start_date, end_date):
@@ -405,51 +366,9 @@ main_container = st.container()
 # 结果展示区域
 result_container = st.container()
 
-# 股票信息显示逻辑
-with stock_info_container:
-    # 检查是否已输入股票代码
-    if stock_code:
-        with st.spinner("正在获取股票基本信息..."):
-            # 获取股票基本信息
-            stock_info_dict, stock_name, display_code = get_stock_info(stock_code)
-            
-            if stock_info_dict:
-                # 创建一个美观的股票信息卡片
-                st.subheader(f"📊 股票基本信息 - {stock_name}")
-                
-                # 使用卡片式布局展示股票信息
-                col1, col2, col3 = st.columns(3)
-                
-                # 第一列信息
-                with col1:
-                    st.markdown("### 基本信息")
-                    st.markdown(f"**股票代码**: {stock_info_dict.get('ts_code', 'N/A')}")
-                    st.markdown(f"**证券名称**: {stock_info_dict.get('name', 'N/A')}")
-                    st.markdown(f"**市场**: {stock_info_dict.get('market', 'N/A')}")
-                    st.markdown(f"**交易所**: {stock_info_dict.get('exchange', 'N/A')}")
-                
-                # 第二列信息
-                with col2:
-                    st.markdown("### 分类信息")
-                    st.markdown(f"**所属区域**: {stock_info_dict.get('area', 'N/A')}")
-                    st.markdown(f"**所属行业**: {stock_info_dict.get('industry', 'N/A')}")
-                    st.markdown(f"**上市状态**: {stock_info_dict.get('list_status', 'N/A')}")
-                    st.markdown(f"**上市日期**: {stock_info_dict.get('list_date', 'N/A')}")
-                
-                # 第三列信息
-                with col3:
-                    st.markdown("### 更多信息")
-                    st.markdown(f"**股票简称**: {stock_info_dict.get('symbol', 'N/A')}")
-                    # 显示公司全称，可能较长，使用expander
-                    with st.expander("查看公司全称"):
-                        st.markdown(f"**公司全称**: {stock_info_dict.get('fullname', 'N/A')}")
-                
-                # 添加分隔线
-                st.divider()
-    else:
-        # 初始提示信息
-        with main_container:
-            st.info("请在侧边栏输入股票代码并点击'开始预测'按钮")
+# 初始提示信息
+with main_container:
+    st.info("请在侧边栏输入股票代码并点击'开始预测'按钮")
 
 # 数据可视化函数
 def create_visualizations(stock_df, stock_name):
@@ -586,27 +505,17 @@ def create_visualizations(stock_df, stock_name):
         ),
         hovertemplate='波动率: %{x:.2f}%<br>涨跌幅: %{y:.2f}%'
     ))
-        
-    # 添加趋势线（增加错误处理）
-    try:
-        # 检查数据中是否有NaN值并过滤
-        clean_data = stock_df.dropna(subset=['relative_volatility', 'pct_chg'])
-        
-        # 确保有足够的数据点进行拟合
-        if len(clean_data) >= 2:
-            # 使用更稳健的方法计算趋势线
-            z = np.polyfit(clean_data['relative_volatility'], clean_data['pct_chg'], 1)
-            p = np.poly1d(z)
-            fig4.add_trace(go.Scatter(
-                x=clean_data['relative_volatility'],
-                y=p(clean_data['relative_volatility']),
-                mode='lines',
-                name='趋势线',
-                line=dict(color='blue', width=1.5, dash='dash')
-            ))
-    except np.linalg.LinAlgError:
-        # 如果拟合失败，跳过趋势线添加
-        pass
+    
+    # 添加趋势线
+    z = np.polyfit(stock_df['relative_volatility'], stock_df['pct_chg'], 1)
+    p = np.poly1d(z)
+    fig4.add_trace(go.Scatter(
+        x=stock_df['relative_volatility'],
+        y=p(stock_df['relative_volatility']),
+        mode='lines',
+        name='趋势线',
+        line=dict(color='blue', width=1.5, dash='dash')
+    ))
     
     # 更新布局
     fig4.update_layout(
@@ -629,7 +538,7 @@ def create_visualizations(stock_df, stock_name):
         name='K线',
         increasing_line_color='#FF4B4B',  # 上涨为红色
         decreasing_line_color='#28A745',  # 下跌为绿色
-        hovertext=[f'日期: {d}<br>开盘: ¥{o:.2f}<br>最高: ¥{h:.2f}<br>最低: ¥{l:.2f}<br>收盘: ¥{c:.2f}' for d, o, h, l, c in zip(stock_df['trade_date'], stock_df['open'], stock_df['high'], stock_df['low'], stock_df['close']) if not any(pd.isna(val) for val in [d, o, h, l, c])]
+        hovertemplate='日期: %{x}<br>开盘: ¥%{open:.2f}<br>最高: ¥%{high:.2f}<br>最低: ¥%{low:.2f}<br>收盘: ¥%{close:.2f}'
     )])
     
     # 更新K线图布局
