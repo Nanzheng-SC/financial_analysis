@@ -99,12 +99,109 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+# 加载股票基本信息数据
+@st.cache_data(ttl=3600)
+def load_stock_data():
+    """加载股票基本信息数据，优先从tushare API获取最新数据"""
+    try:
+        # 首先尝试从tushare API获取最新股票列表
+        try:
+            # 使用tushare API获取所有上市股票的基本信息
+            stock_basic_data = tushare_api.stock_basic(
+                list_status='L',  # 只获取上市股票
+                fields='ts_code,symbol,name,industry,area,list_date,status'
+            )
+            
+            if not stock_basic_data.empty:
+                df = stock_basic_data
+                st.success("✅ 成功从tushare API获取最新股票列表")
+            else:
+                # 如果API获取失败或返回空数据，回退到本地文件
+                stock_basic_path = "e:/Study/2-1/finance_analysis/lecture10_data_visualization/stock_basic.csv"
+                df = pd.read_csv(stock_basic_path)
+                df = df[df['list_status'] == 'L']  # 过滤掉已退市的股票
+                st.warning("⚠️ 使用本地股票列表数据（tushare API获取失败）")
+        except Exception as api_error:
+            # API调用失败时使用本地文件
+            st.warning(f"⚠️ tushare API调用失败，使用本地股票列表数据: {str(api_error)}")
+            stock_basic_path = "e:/Study/2-1/finance_analysis/lecture10_data_visualization/stock_basic.csv"
+            df = pd.read_csv(stock_basic_path)
+            df = df[df['list_status'] == 'L']  # 过滤掉已退市的股票
+        
+        # 数据清洗和处理
+        # 清洗股票名称（移除特殊字符，如*ST、ST、退等）
+        df['clean_name'] = df['name'].str.replace(r'[*ST退]', '', regex=True).str.strip()
+        
+        # 确保股票代码是字符串格式
+        df['symbol'] = df['symbol'].astype(str)
+        
+        # 生成显示名称，格式为：股票简称(股票代码)
+        df['display_name'] = df.apply(lambda x: f"{x['name']}({x['symbol']})", axis=1)
+        
+        # 生成用于搜索的名称，包含清洗后的名称和代码
+        df['search_name'] = df.apply(lambda x: f"{x['clean_name']} {x['symbol']} {x['name']}", axis=1)
+        
+        # 按行业分组
+        industries = sorted(df['industry'].unique())
+        
+        return df, industries
+    except Exception as e:
+        st.error(f"加载股票数据失败: {str(e)}")
+        return pd.DataFrame(), []
+
 # 侧边栏
 with st.sidebar:
     st.header("🔧 参数设置")
     st.markdown("请输入以下信息开始股票预测分析：")
-    # 股票代码输入
-    stock_code = st.text_input("📝 股票代码", value="600519", help="例如：600519（贵州茅台）")
+    
+    # 加载股票数据
+    stock_df, industries = load_stock_data()
+    
+    if not stock_df.empty:
+        # 行业筛选
+        selected_industry = st.selectbox(
+            "🏭 选择行业",
+            options=["全部行业"] + industries,
+            help="选择一个行业来筛选股票"
+        )
+        
+        # 根据行业筛选股票
+        filtered_stocks = stock_df.copy()
+        if selected_industry != "全部行业":
+            filtered_stocks = filtered_stocks[filtered_stocks['industry'] == selected_industry]
+        
+        # 股票选择下拉框
+        if not filtered_stocks.empty:
+            # 按清洗后的股票名称排序
+            filtered_stocks = filtered_stocks.sort_values('clean_name')
+            
+            # 创建显示名称和真实代码的映射
+            stock_options = {
+                row['display_name']: row['symbol']
+                for _, row in filtered_stocks.iterrows()
+            }
+            
+            # 默认选择贵州茅台(600519)
+            default_value = next((key for key, value in stock_options.items() if value == "600519"), None)
+            
+            # 股票选择下拉框
+            selected_display = st.selectbox(
+                "📝 选择股票",
+                options=list(stock_options.keys()),
+                index=list(stock_options.keys()).index(default_value) if default_value else 0,
+                help="从列表中选择或搜索股票（支持名称、代码搜索）",
+                key="stock_selectbox"
+            )
+            
+            # 获取选中的股票代码
+            stock_code = stock_options[selected_display]
+        else:
+            st.warning("未找到符合条件的股票")
+            stock_code = "600519"
+    else:
+        # 如果加载失败，回退到文本输入
+        st.warning("股票数据加载失败，使用文本输入模式")
+        stock_code = st.text_input("📝 股票代码", value="600519", help="例如：600519（贵州茅台）")
     # 历史数据天数
     history_days = st.slider(
         "📊 历史数据天数", 
@@ -127,6 +224,44 @@ with st.sidebar:
     st.divider()
     st.markdown("💡 **提示：** 数据来源为Tushare金融大数据平台")
     st.markdown("⚠️ **注意：** 预测结果仅供参考，不构成投资建议")
+    
+    # 添加名词解释部分
+    with st.expander("📖 技术指标名词解释", expanded=False):
+        st.markdown("### 移动平均线 (MA)")
+        st.markdown("- **MA5**: 5日移动平均线，反映短期价格趋势")
+        st.markdown("- **MA10**: 10日移动平均线，反映中期价格趋势")
+        st.markdown("- **MA20**: 20日移动平均线，反映长期价格趋势")
+        st.markdown("- **移动平均线**: 通过计算一段时间内的平均价格来平滑价格波动，识别价格趋势")
+        
+        st.markdown("### MACD指标")
+        st.markdown("- **MACD**: 指数平滑异同移动平均线，用于判断价格趋势的强度、方向和反转信号")
+        st.markdown("- **MACD_DIFF**: 快速线，短期EMA与长期EMA的差值")
+        st.markdown("- **MACD_DEA**: 慢速线，MACD_DIFF的9日EMA")
+        st.markdown("- **MACD柱状图**: MACD_DIFF与MACD_DEA的差值的2倍，反映价格动能变化")
+        
+        st.markdown("### KDJ指标")
+        st.markdown("- **KDJ**: 随机指标，用于判断市场超买超卖状态")
+        st.markdown("- **KDJ_K**: 快速随机指标，反应短期价格波动")
+        st.markdown("- **KDJ_D**: 慢速随机指标，反应中期价格波动")
+        st.markdown("- **KDJ_J**: 辅助指标，反应长期价格波动")
+        st.markdown("- **超买区**: KDJ值大于80，可能预示价格即将下跌")
+        st.markdown("- **超卖区**: KDJ值小于20，可能预示价格即将上涨")
+        
+        st.markdown("### RSI指标")
+        st.markdown("- **RSI**: 相对强弱指标，衡量市场买卖力量的强弱")
+        st.markdown("- **RSI6**: 6日RSI，反映短期市场情绪")
+        st.markdown("- **RSI12**: 12日RSI，反映中期市场情绪")
+        st.markdown("- **RSI24**: 24日RSI，反映长期市场情绪")
+        st.markdown("- **超买区**: RSI值大于70，可能预示价格即将下跌")
+        st.markdown("- **超卖区**: RSI值小于30，可能预示价格即将上涨")
+        
+        st.markdown("### 成交量指标")
+        st.markdown("- **成交量**: 指在一定时间内市场中股票成交的数量，反映市场活跃度")
+        st.markdown("- **VOL**: 每日成交量")
+        st.markdown("- **VOL_MA5**: 5日成交量移动平均线，反映短期成交趋势")
+        
+        st.markdown("### 波动率")
+        st.markdown("- **波动率**: 衡量价格波动的剧烈程度，波动率越高，价格风险越大")
 
 # 调用大模型进行预测的函数
 @st.cache_data(ttl=1800, show_spinner=False)  # 缓存30分钟，减少API调用频率
@@ -143,108 +278,114 @@ def predict_stock_trend(stock_df, stock_name, stock_code, prediction_days):
     返回:
     - 预测结果字典
     """
-    def local_prediction_fallback():
-        """本地预测备用方案"""
-        # 基于简单技术分析实现本地预测
-        last_date = stock_df['trade_date'].iloc[-1]
-        predictions = []
-        
-        # 计算近期趋势
-        recent_returns = stock_df['pct_chg'].iloc[-5:]
-        avg_return = recent_returns.mean()
-        
-        # 确定趋势和置信度
-        if avg_return > 1.5:
-            trend = '上涨'
-            confidence = '高'
-        elif avg_return > 0.5:
-            trend = '上涨'
-            confidence = '中'
-        elif avg_return < -1.5:
-            trend = '下跌'
-            confidence = '高'
-        elif avg_return < -0.5:
-            trend = '下跌'
-            confidence = '中'
-        else:
-            trend = '持平'
-            confidence = '低'
-        
-        # 生成预测
-        current_date = last_date
-        for i in range(prediction_days):
-            # 跳过周末
-            current_date += timedelta(days=1)
-            while current_date.weekday() >= 5:  # 0=周一, 4=周五, 5=周六, 6=周日
-                current_date += timedelta(days=1)
-            
-            # 简单的预测逻辑：趋势延续，但第三天可能反转
-            if i < 2:
-                pred = trend
-            else:
-                # 第三天可能出现反转
-                if trend == '上涨':
-                    pred = np.random.choice(['上涨', '持平'], p=[0.6, 0.4])
-                elif trend == '下跌':
-                    pred = np.random.choice(['下跌', '持平'], p=[0.6, 0.4])
-                else:
-                    pred = np.random.choice(['上涨', '下跌', '持平'], p=[0.33, 0.33, 0.34])
-            
-            predictions.append({
-                '日期': current_date.strftime('%Y-%m-%d'),
-                '预测结果': pred
-            })
-        
-        return {
-            'predictions': predictions,
-            'confidence': confidence,
-            'analysis': f"基于最近5个交易日平均涨跌幅{avg_return:.2f}%的简单技术分析。这是备用预测方案，仅供参考。",
-            'risk_warning': "本预测为本地备用方案，基于简单技术指标，准确度有限。投资有风险，请谨慎决策。"
-        }
+
     
     try:
         # 准备历史数据作为输入
-        recent_data = stock_df.tail(10).copy()
+        recent_data = stock_df.tail(20).copy()  # 使用最近20个交易日的数据
         
-        # 格式化历史数据为提示词格式
-        historical_data_str = "最近10个交易日的数据：\n"
+        # 格式化基本历史数据为提示词格式
+        historical_data_str = "最近20个交易日的基本数据：\n"
         for _, row in recent_data.iterrows():
             historical_data_str += f"日期: {row['trade_date'].strftime('%Y-%m-%d')}, "
-            historical_data_str += f"开盘价: ¥{row['open']:.2f}, "
-            historical_data_str += f"收盘价: ¥{row['close']:.2f}, "
-            historical_data_str += f"涨跌幅: {row['pct_chg']:.2f}%\n"
+            # 确保数值类型后再格式化
+            open_price = float(row['open']) if isinstance(row['open'], (int, float, str)) and str(row['open']).replace('.', '', 1).isdigit() else 0
+            historical_data_str += f"开盘价: ¥{open_price:.2f}, "
+            close_price = float(row['close']) if isinstance(row['close'], (int, float, str)) and str(row['close']).replace('.', '', 1).isdigit() else 0
+            historical_data_str += f"收盘价: ¥{close_price:.2f}, "
+            high_price = float(row['high']) if isinstance(row['high'], (int, float, str)) and str(row['high']).replace('.', '', 1).isdigit() else 0
+            historical_data_str += f"最高价: ¥{high_price:.2f}, "
+            low_price = float(row['low']) if isinstance(row['low'], (int, float, str)) and str(row['low']).replace('.', '', 1).isdigit() else 0
+            historical_data_str += f"最低价: ¥{low_price:.2f}, "
+            pct_chg = float(row['pct_chg']) if isinstance(row['pct_chg'], (int, float, str)) and str(row['pct_chg']).replace('.', '', 1).isdigit() else 0
+            historical_data_str += f"涨跌幅: {pct_chg:.2f}%\n"
+        
+        # 格式化高级技术指标数据
+        technical_indicators_str = "最近10个交易日的高级技术指标：\n"
+        for _, row in recent_data.tail(10).iterrows():
+            technical_indicators_str += f"日期: {row['trade_date'].strftime('%Y-%m-%d')}, "
+            # 确保数值类型后再格式化，处理可能的非数字值
+            def format_float(value, default=0.0, precision=2):
+                try:
+                    if value == '-' or value is None or pd.isna(value):
+                        return default
+                    return float(value)
+                except (ValueError, TypeError):
+                    return default
+            
+            ma5 = format_float(row.get('ma5', '-'))
+            technical_indicators_str += f"MA5: ¥{ma5:.2f}, "
+            ma10 = format_float(row.get('ma10', '-'))
+            technical_indicators_str += f"MA10: ¥{ma10:.2f}, "
+            ma20 = format_float(row.get('ma20', '-'))
+            technical_indicators_str += f"MA20: ¥{ma20:.2f}, "
+            macd_dif = format_float(row.get('macd_dif', '-'), precision=4)
+            technical_indicators_str += f"MACD_DIFF: {macd_dif:.4f}, "
+            macd_dea = format_float(row.get('macd_dea', '-'), precision=4)
+            technical_indicators_str += f"MACD_DEA: {macd_dea:.4f}, "
+            macd = format_float(row.get('macd', '-'), precision=4)
+            technical_indicators_str += f"MACD: {macd:.4f}, "
+            kdj_k = format_float(row.get('kdj_k', '-'))
+            technical_indicators_str += f"KDJ_K: {kdj_k:.2f}, "
+            kdj_d = format_float(row.get('kdj_d', '-'))
+            technical_indicators_str += f"KDJ_D: {kdj_d:.2f}, "
+            kdj_j = format_float(row.get('kdj_j', '-'))
+            technical_indicators_str += f"KDJ_J: {kdj_j:.2f}, "
+            rsi_6 = format_float(row.get('rsi_6', '-'))
+            technical_indicators_str += f"RSI6: {rsi_6:.2f}, "
+            rsi_12 = format_float(row.get('rsi_12', '-'))
+            technical_indicators_str += f"RSI12: {rsi_12:.2f}, "
+            rsi_24 = format_float(row.get('rsi_24', '-'))
+            technical_indicators_str += f"RSI24: {rsi_24:.2f}\n"
         
         # 构建改进的提示词
         prompt = f"""
-        你是一位资深的量化金融分析师，拥有丰富的股票技术分析和趋势预测经验。请基于以下历史数据，对{stock_name}({stock_code})进行专业分析并预测未来{prediction_days}个交易日的股价走势。
+        你是一位资深的量化金融分析师，拥有丰富的股票技术分析和趋势预测经验。请基于以下历史数据和高级技术指标，对{stock_name}({stock_code})进行专业分析并预测未来{prediction_days}个交易日的股价走势。
         
-        【历史数据】
+        【历史基本数据】
         {historical_data_str}
         
+        【高级技术指标】
+        {technical_indicators_str}
+        
         【分析要求】
-        1. 技术分析：详细分析价格趋势、支撑/阻力位、K线形态、价格动量和波动性
-        2. 量化评估：计算并分析关键指标，如移动平均线关系、相对强弱、突破信号等
-        3. 模式识别：识别重复出现的价格模式和趋势转换信号
-        4. 概率评估：基于历史类似情况，评估各种走势的可能性
+        1. 综合技术分析：
+           - 价格趋势分析：基于移动平均线（MA5、MA10、MA20）的排列和交叉情况
+           - 支撑/阻力位识别：结合历史价格和BOLL通道分析关键位置
+           - 动量分析：通过MACD指标分析价格动能变化
+           - 超买超卖分析：基于KDJ和RSI指标判断市场情绪
+        2. 量化评估：
+           - 计算并分析指标之间的背离信号
+           - 评估各指标的强度和可靠性
+           - 基于历史类似模式进行概率分析
+        3. 模式识别：
+           - 识别关键的技术形态（如金叉、死叉、突破、回调等）
+           - 分析成交量与价格的关系
+           - 评估市场波动性变化
+        4. 风险评估：
+           - 识别潜在的风险因素
+           - 分析预测的不确定性来源
+           - 提供风险控制建议
         
         【预测内容】
         请提供以下结构化信息：
-        1. 未来{prediction_days}个交易日的逐日预测结果（上涨/下跌/持平）
-        2. 预测置信度（高/中/低）及量化依据
-        3. 详细分析理由，包括关键技术指标解读
+        1. 未来{prediction_days}个交易日的逐日预测结果（上涨/下跌/持平），并给出预期涨跌幅范围
+        2. 预测置信度（高/中/低）及量化依据（基于各技术指标的一致性）
+        3. 详细分析理由，包括各高级技术指标的具体解读
         4. 潜在风险因素和不确定性来源
         
         【输出格式】
         请严格按照JSON格式返回，确保格式正确无误：
         {{
           "predictions": [
-            {{"date": "YYYY-MM-DD", "prediction": "上涨/下跌/持平"}},
+            {{"date": "YYYY-MM-DD", "prediction": "上涨/下跌/持平", "expected_range": "-2%至+3%"}},
             ...
           ],
           "confidence": "高/中/低",
           "confidence_score": 0-1之间的数值（量化置信度）,
-          "analysis": "分析理由",
+          "analysis": "详细分析理由",
           "risk_warning": "风险提示"
+        }}
         """
         
         # 使用OpenAI客户端调用豆包API
@@ -258,15 +399,15 @@ def predict_stock_trend(stock_df, stock_name, stock_code, prediction_days):
         else:
             print("警告: 未配置Doubao_API_KEY")
         
-        # 初始化OpenAI客户端，确保在API密钥缺失时不会崩溃
-        if api_key and base_url:
-            client = OpenAI(
-                base_url=base_url,
-                api_key=api_key
-            )
-        else:
-            st.warning("豆包API配置不完整，将使用本地预测备用方案")
-            return local_prediction_fallback()
+        # 初始化OpenAI客户端
+        if not api_key or not base_url:
+            st.error("豆包API配置不完整，请检查环境变量中的API密钥和基础URL")
+            return None
+        
+        client = OpenAI(
+            base_url=base_url,
+            api_key=api_key
+        )
         
         # 发送请求，添加超时控制
         try:
@@ -283,8 +424,8 @@ def predict_stock_trend(stock_df, stock_name, stock_code, prediction_days):
         except Exception as api_error:
             error_msg = f"API调用超时或失败: {str(api_error)}"
             print(error_msg)
-            st.warning(f"{error_msg}，将使用本地预测备用方案")
-            return local_prediction_fallback()
+            st.error(f"{error_msg}")
+            return None
         
         # 提取预测结果
         prediction_text = completion.choices[0].message.content
@@ -327,9 +468,8 @@ def predict_stock_trend(stock_df, stock_name, stock_code, prediction_days):
         # 处理OpenAI客户端可能抛出的各种异常
         error_msg = f"API调用失败: {str(e)}"
         print(error_msg)
-        st.warning(f"{error_msg}，将使用本地预测备用方案")
-        # 使用本地预测备用方案
-        return local_prediction_fallback()
+        st.error(f"{error_msg}")
+        return None
 
 # 生成模拟股票数据的函数
 def generate_mock_stock_data(stock_code, start_date, end_date):
@@ -434,25 +574,67 @@ def get_stock_data(stock_code, start_date, end_date, max_retries=2):
             display_code = stock_code  # 保存原始代码用于显示
             
             # 根据股票代码前缀判断市场并添加后缀
-            if not (stock_code.endswith('.SH') or stock_code.endswith('.SZ')):
-                if stock_code.startswith('6'):
-                    stock_code = f"{stock_code}.SH"  # 上海市场
+            # 确保stock_code是字符串类型
+            stock_code_str = str(stock_code).strip()
+            
+            # 验证股票代码有效性，防止无效字符如'f'
+            if not stock_code_str or len(stock_code_str) < 5 or not stock_code_str[:6].isdigit():
+                st.error(f"无效的股票代码：{stock_code_str}，请检查输入")
+                socket.setdefaulttimeout(original_timeout)  # 恢复原始超时设置
+                return None, None, None, stock_info
+            
+            # 统一处理不同格式的市场后缀
+            if stock_code_str.endswith('.SH') or stock_code_str.endswith('.sh') or stock_code_str.endswith('.ss'):
+                stock_code = stock_code_str.split('.')[0] + '.SH'
+                stock_info['market'] = '上海证券交易所'
+            elif stock_code_str.endswith('.SZ') or stock_code_str.endswith('.sz'):
+                stock_code = stock_code_str.split('.')[0] + '.SZ'
+                stock_info['market'] = '深圳证券交易所'
+            else:
+                # 如果没有后缀，根据股票代码前缀添加
+                if stock_code_str.startswith('6'):
+                    stock_code = f"{stock_code_str}.SH"  # 上海市场
                     stock_info['market'] = '上海证券交易所'
-                elif stock_code.startswith(('0', '3')):
-                    stock_code = f"{stock_code}.SZ"  # 深圳市场
+                elif stock_code_str.startswith(('0', '3')):
+                    stock_code = f"{stock_code_str}.SZ"  # 深圳市场
                     stock_info['market'] = '深圳证券交易所'
+                else:
+                    # 如果无法判断市场，尝试两种格式
+                    # 先尝试上海市场
+                    stock_code = f"{stock_code_str}.SH"
+                    stock_info['market'] = '上海证券交易所'
+                    
+                    # 后续会检查数据是否存在，如果不存在会报错
             
             # 获取股票基本信息（添加try/except块）
             try:
-                # 扩展fields参数获取更多信息：名称、行业、地域、上市日期、状态
+                # 优先使用stock_basic查询单个股票信息
                 stock_basic = tushare_api.stock_basic(ts_code=stock_code, fields='name,industry,area,list_date,status')
+                
                 if not stock_basic.empty:
+                    # 处理API返回的数据
                     stock_info['name'] = stock_basic['name'].values[0] if 'name' in stock_basic.columns else '未知股票'
                     stock_info['industry'] = stock_basic['industry'].values[0] if 'industry' in stock_basic.columns else '未知'
                     stock_info['area'] = stock_basic['area'].values[0] if 'area' in stock_basic.columns else '未知'
                     stock_info['list_date'] = stock_basic['list_date'].values[0] if 'list_date' in stock_basic.columns else '未知'
                     stock_info['status'] = '上市' if (stock_basic['status'].values[0] == 'L' if 'status' in stock_basic.columns else True) else '退市'
-                stock_name = stock_info['name']
+                    stock_name = stock_info['name']
+                else:
+                    # 如果stock_basic查询单个股票失败，尝试从stock_basic获取所有股票然后筛选
+                    all_stocks = tushare_api.stock_basic(list_status='L', fields='ts_code,name,industry,area,list_date,status')
+                    single_stock = all_stocks[all_stocks['ts_code'] == stock_code]
+                    
+                    if not single_stock.empty:
+                        stock_info['name'] = single_stock['name'].values[0]
+                        stock_info['industry'] = single_stock['industry'].values[0]
+                        stock_info['area'] = single_stock['area'].values[0]
+                        stock_info['list_date'] = single_stock['list_date'].values[0]
+                        stock_info['status'] = '上市' if single_stock['status'].values[0] == 'L' else '退市'
+                        stock_name = stock_info['name']
+                    else:
+                        # 如果还是查询失败，检查stock_code是否正确
+                        st.warning(f"无法查询到股票代码 {stock_code} 的基本信息，可能是代码不存在或已退市")
+                        stock_name = f"{display_code}股票"
             except Exception as e:
                 st.warning(f"获取股票基本信息失败: {str(e)}，使用默认信息")
                 stock_name = f"{display_code}股票"
@@ -460,14 +642,16 @@ def get_stock_data(stock_code, start_date, end_date, max_retries=2):
             # 获取日线数据（添加try/except块）
             try:
                 df = tushare_api.daily(ts_code=stock_code, start_date=start_date, end_date=end_date)
+                
+                if df.empty:
+                    # 如果日线数据为空，检查股票是否存在或已退市
+                    st.error(f"未找到股票 {display_code} 的日线数据，请检查股票代码是否正确或股票是否已退市")
+                    socket.setdefaulttimeout(original_timeout)  # 恢复原始超时设置
+                    return None, None, None, stock_info
             except Exception as e:
                 st.error(f"获取股票日线数据失败: {str(e)}")
                 socket.setdefaulttimeout(original_timeout)  # 恢复原始超时设置
                 return None, None, None, stock_info
-            if df.empty:
-                st.error(f"未找到股票 {display_code} 的数据，请检查股票代码是否正确")
-                socket.setdefaulttimeout(original_timeout)  # 恢复原始超时设置
-                return None, None, None
             
             # 数据处理
             df['trade_date'] = pd.to_datetime(df['trade_date'])
@@ -477,11 +661,86 @@ def get_stock_data(stock_code, start_date, end_date, max_retries=2):
             df['pct_chg'] = df['close'].pct_change() * 100  # 涨跌幅百分比
             df['ma5'] = df['close'].rolling(window=5).mean()  # 5日均线
             df['ma10'] = df['close'].rolling(window=10).mean()  # 10日均线
+            df['ma20'] = df['close'].rolling(window=20).mean()  # 20日均线
             df['vol_ma5'] = df['vol'].rolling(window=5).mean()  # 5日成交量均线
+            df['vol_ma10'] = df['vol'].rolling(window=10).mean()  # 10日成交量均线
             
             # 添加技术指标
             df['volatility'] = df['high'] - df['low']  # 波动率（最高价-最低价）
             df['price_change'] = df['close'] - df['open']  # 价格变动
+            
+            # 获取日线基本指标
+            try:
+                # 使用tushare的daily_basic接口获取基本技术指标
+                daily_basic_df = tushare_api.daily_basic(ts_code=stock_code, start_date=start_date, end_date=end_date,
+                                                       fields='ts_code,trade_date,turnover_rate,volume_ratio,pe,pe_ttm,pb')
+                
+                if not daily_basic_df.empty:
+                    daily_basic_df['trade_date'] = pd.to_datetime(daily_basic_df['trade_date'])
+                    # 将日线基本指标合并到主数据框
+                    df = df.merge(daily_basic_df, on=['ts_code', 'trade_date'], how='left')
+                    
+            except Exception as e:
+                st.warning(f"获取日线基本指标失败: {str(e)}")
+                
+            # 自己计算高级技术指标
+            try:
+                # 计算MACD指标
+                exp1 = df['close'].ewm(span=12, adjust=False).mean()
+                exp2 = df['close'].ewm(span=26, adjust=False).mean()
+                df['macd_dif'] = exp1 - exp2  # 注意：这里使用与图表显示一致的列名 macd_dif
+                df['macd_dea'] = df['macd_dif'].ewm(span=9, adjust=False).mean()
+                df['macd'] = 2 * (df['macd_dif'] - df['macd_dea'])  # 注意：这里使用与图表显示一致的列名 macd
+                
+                # 计算KDJ指标
+                low_min = df['low'].rolling(window=9).min()
+                high_max = df['high'].rolling(window=9).max()
+                df['kdj_k'] = (df['close'] - low_min) / (high_max - low_min) * 100  # 注意：使用与图表显示一致的列名 kdj_k
+                df['kdj_d'] = df['kdj_k'].rolling(window=3).mean()  # 注意：使用与图表显示一致的列名 kdj_d
+                df['kdj_j'] = 3 * df['kdj_k'] - 2 * df['kdj_d']  # 注意：使用与图表显示一致的列名 kdj_j
+                
+                # 计算RSI指标
+                delta = df['close'].diff()
+                gain = (delta.where(delta > 0, 0)).rolling(window=6).mean()
+                loss = (-delta.where(delta < 0, 0)).rolling(window=6).mean()
+                rs = gain / loss
+                df['rsi_6'] = 100 - (100 / (1 + rs))  # 注意：使用与图表显示一致的列名 rsi_6
+                
+                gain = (delta.where(delta > 0, 0)).rolling(window=12).mean()
+                loss = (-delta.where(delta < 0, 0)).rolling(window=12).mean()
+                rs = gain / loss
+                df['rsi_12'] = 100 - (100 / (1 + rs))  # 注意：使用与图表显示一致的列名 rsi_12
+                
+                gain = (delta.where(delta > 0, 0)).rolling(window=24).mean()
+                loss = (-delta.where(delta < 0, 0)).rolling(window=24).mean()
+                rs = gain / loss
+                df['rsi_24'] = 100 - (100 / (1 + rs))  # 注意：使用与图表显示一致的列名 rsi_24
+                
+                # 计算BOLL指标
+                df['boll_mid'] = df['close'].rolling(window=20).mean()
+                df['boll_std'] = df['close'].rolling(window=20).std()
+                df['boll_upper'] = df['boll_mid'] + 2 * df['boll_std']
+                df['boll_lower'] = df['boll_mid'] - 2 * df['boll_std']
+                
+                # 计算WR指标（威廉指标）
+                df['wr_6'] = -100 * (high_max.rolling(window=6).max() - df['close']) / (high_max.rolling(window=6).max() - low_min.rolling(window=6).min())
+                df['wr_14'] = -100 * (high_max.rolling(window=14).max() - df['close']) / (high_max.rolling(window=14).max() - low_min.rolling(window=14).min())
+                
+                # 计算OBV指标（能量潮）
+                df['obv'] = (df['vol'] * np.sign(df['close'].diff())).cumsum()
+                
+                # 计算ATR指标（平均真实波动范围）
+                df['tr'] = np.maximum(df['high'] - df['low'], 
+                                     np.maximum(abs(df['high'] - df['close'].shift(1)), 
+                                               abs(df['low'] - df['close'].shift(1))))
+                df['atr'] = df['tr'].rolling(window=14).mean()
+                
+                # 计算动量指标
+                df['momentum_5'] = df['close'] / df['close'].shift(5) - 1
+                df['momentum_10'] = df['close'] / df['close'].shift(10) - 1
+                
+            except Exception as e:
+                st.warning(f"计算高级技术指标失败: {str(e)}，将使用基础指标")
             
             socket.setdefaulttimeout(original_timeout)  # 恢复原始超时设置
             return df, stock_name, display_code, stock_info
@@ -501,21 +760,12 @@ def get_stock_data(stock_code, start_date, end_date, max_retries=2):
                 time.sleep(2)  # 等待2秒后重试
             continue
     
-    # 所有重试都失败，使用模拟数据作为备用方案
+    # 所有重试都失败
     error_msg = f"在{max_retries+1}次尝试后仍无法获取股票数据: {last_error}"
-    st.warning(f"{error_msg}\n将使用模拟数据进行展示，请注意这不是真实数据！")
+    st.error(f"{error_msg}")
     print(error_msg)
     socket.setdefaulttimeout(original_timeout)  # 恢复原始超时设置
-    
-    # 生成并返回模拟数据
-    df, stock_name, display_code = generate_mock_stock_data(stock_code, start_date, end_date)
-    # 为模拟数据添加基本信息
-    stock_info['name'] = stock_name
-    stock_info['industry'] = '模拟行业'
-    stock_info['area'] = '模拟地区'
-    stock_info['list_date'] = '20000101'
-    stock_info['status'] = '上市'
-    return df, stock_name, display_code, stock_info
+    return None, None, None, stock_info
 
 # 主内容区
 main_container = st.container()
@@ -535,7 +785,7 @@ def create_visualizations(stock_df, stock_name):
     # 计算额外指标用于可视化
     stock_df['relative_volatility'] = (stock_df['volatility'] / stock_df['close']) * 100
     
-    # 1. 交互式价格走势图 (支持缩放)
+    # 1. 交互式价格走势图 (支持缩放) - 改进版，添加更多均线
     fig1 = go.Figure()
     # 添加收盘价线
     fig1.add_trace(go.Scatter(
@@ -561,6 +811,38 @@ def create_visualizations(stock_df, stock_name):
         line=dict(color='#2ca02c', width=1.5, dash='dot'),
         hovertemplate='日期: %{x}<br>10日均线: ¥%{y:.2f}'
     ))
+    # 添加20日均线
+    fig1.add_trace(go.Scatter(
+        x=stock_df['trade_date'], 
+        y=stock_df['ma20'], 
+        name='20日均线',
+        line=dict(color='#d62728', width=1.5, dash='dot'),
+        hovertemplate='日期: %{x}<br>20日均线: ¥%{y:.2f}'
+    ))
+    
+    # 如果有BOLL指标，添加BOLL通道
+    if 'boll_upper' in stock_df.columns and 'boll_mid' in stock_df.columns and 'boll_lower' in stock_df.columns:
+        fig1.add_trace(go.Scatter(
+            x=stock_df['trade_date'], 
+            y=stock_df['boll_upper'], 
+            name='BOLL上轨',
+            line=dict(color='#9467bd', width=1, dash='dash'),
+            hovertemplate='日期: %{x}<br>BOLL上轨: ¥%{y:.2f}'
+        ))
+        fig1.add_trace(go.Scatter(
+            x=stock_df['trade_date'], 
+            y=stock_df['boll_mid'], 
+            name='BOLL中轨',
+            line=dict(color='#9467bd', width=1, dash='dash'),
+            hovertemplate='日期: %{x}<br>BOLL中轨: ¥%{y:.2f}'
+        ))
+        fig1.add_trace(go.Scatter(
+            x=stock_df['trade_date'], 
+            y=stock_df['boll_lower'], 
+            name='BOLL下轨',
+            line=dict(color='#9467bd', width=1, dash='dash'),
+            hovertemplate='日期: %{x}<br>BOLL下轨: ¥%{y:.2f}'
+        ))
     
     # 更新布局
     fig1.update_layout(
@@ -747,7 +1029,174 @@ def create_visualizations(stock_df, stock_name):
         xaxis_rangeslider_visible=False  # 隐藏范围滑块以节省空间
     )
     
-    return fig1, fig2, fig3, fig4, fig5
+    # 6. MACD指标图
+    fig6 = go.Figure()
+    if 'macd' in stock_df.columns and 'macd_dif' in stock_df.columns and 'macd_dea' in stock_df.columns:
+        # 添加MACD线
+        fig6.add_trace(go.Scatter(
+            x=stock_df['trade_date'],
+            y=stock_df['macd_dif'],
+            name='DIF',
+            line=dict(color='#ff7f0e', width=1.5),
+            hovertemplate='日期: %{x}<br>DIF: %{y:.2f}'
+        ))
+        # 添加DEA线
+        fig6.add_trace(go.Scatter(
+            x=stock_df['trade_date'],
+            y=stock_df['macd_dea'],
+            name='DEA',
+            line=dict(color='#1f77b4', width=1.5),
+            hovertemplate='日期: %{x}<br>DEA: %{y:.2f}'
+        ))
+        # 添加MACD柱状图
+        fig6.add_trace(go.Bar(
+            x=stock_df['trade_date'],
+            y=stock_df['macd'],
+            name='MACD',
+            marker_color=np.where(stock_df['macd'] >= 0, '#28A745', '#FF4B4B'),
+            hovertemplate='日期: %{x}<br>MACD: %{y:.2f}'
+        ))
+    
+    fig6.update_layout(
+        title=f'{stock_name} MACD指标',
+        xaxis_title='日期',
+        yaxis_title='MACD值',
+        legend_title='指标',
+        hovermode='x unified',
+        margin=dict(l=60, r=40, t=50, b=60),
+        height=300,
+        template='plotly_white'
+    )
+    
+    # 7. KDJ指标图
+    fig7 = go.Figure()
+    if 'kdj_k' in stock_df.columns and 'kdj_d' in stock_df.columns and 'kdj_j' in stock_df.columns:
+        # 添加K线
+        fig7.add_trace(go.Scatter(
+            x=stock_df['trade_date'],
+            y=stock_df['kdj_k'],
+            name='K',
+            line=dict(color='#ff7f0e', width=1.5),
+            hovertemplate='日期: %{x}<br>K值: %{y:.2f}'
+        ))
+        # 添加D线
+        fig7.add_trace(go.Scatter(
+            x=stock_df['trade_date'],
+            y=stock_df['kdj_d'],
+            name='D',
+            line=dict(color='#1f77b4', width=1.5),
+            hovertemplate='日期: %{x}<br>D值: %{y:.2f}'
+        ))
+        # 添加J线
+        fig7.add_trace(go.Scatter(
+            x=stock_df['trade_date'],
+            y=stock_df['kdj_j'],
+            name='J',
+            line=dict(color='#2ca02c', width=1.5),
+            hovertemplate='日期: %{x}<br>J值: %{y:.2f}'
+        ))
+        # 添加超买超卖线
+        fig7.add_shape(
+            type='line',
+            x0=stock_df['trade_date'].min(), x1=stock_df['trade_date'].max(),
+            y0=80, y1=80,
+            line=dict(color='red', width=1, dash='dash')
+        )
+        fig7.add_shape(
+            type='line',
+            x0=stock_df['trade_date'].min(), x1=stock_df['trade_date'].max(),
+            y0=20, y1=20,
+            line=dict(color='green', width=1, dash='dash')
+        )
+        fig7.add_annotation(
+            x=stock_df['trade_date'].min(), y=85,
+            text='超买区(80)',
+            showarrow=False,
+            font=dict(color='red')
+        )
+        fig7.add_annotation(
+            x=stock_df['trade_date'].min(), y=15,
+            text='超卖区(20)',
+            showarrow=False,
+            font=dict(color='green')
+        )
+    
+    fig7.update_layout(
+        title=f'{stock_name} KDJ指标',
+        xaxis_title='日期',
+        yaxis_title='KDJ值',
+        legend_title='指标',
+        hovermode='x unified',
+        margin=dict(l=60, r=40, t=50, b=60),
+        height=300,
+        template='plotly_white'
+    )
+    
+    # 8. RSI指标图
+    fig8 = go.Figure()
+    if 'rsi_6' in stock_df.columns and 'rsi_12' in stock_df.columns and 'rsi_24' in stock_df.columns:
+        # 添加RSI6线
+        fig8.add_trace(go.Scatter(
+            x=stock_df['trade_date'],
+            y=stock_df['rsi_6'],
+            name='RSI_6',
+            line=dict(color='#ff7f0e', width=1.5),
+            hovertemplate='日期: %{x}<br>RSI6: %{y:.2f}'
+        ))
+        # 添加RSI12线
+        fig8.add_trace(go.Scatter(
+            x=stock_df['trade_date'],
+            y=stock_df['rsi_12'],
+            name='RSI_12',
+            line=dict(color='#1f77b4', width=1.5),
+            hovertemplate='日期: %{x}<br>RSI12: %{y:.2f}'
+        ))
+        # 添加RSI24线
+        fig8.add_trace(go.Scatter(
+            x=stock_df['trade_date'],
+            y=stock_df['rsi_24'],
+            name='RSI_24',
+            line=dict(color='#2ca02c', width=1.5),
+            hovertemplate='日期: %{x}<br>RSI24: %{y:.2f}'
+        ))
+        # 添加超买超卖线
+        fig8.add_shape(
+            type='line',
+            x0=stock_df['trade_date'].min(), x1=stock_df['trade_date'].max(),
+            y0=70, y1=70,
+            line=dict(color='red', width=1, dash='dash')
+        )
+        fig8.add_shape(
+            type='line',
+            x0=stock_df['trade_date'].min(), x1=stock_df['trade_date'].max(),
+            y0=30, y1=30,
+            line=dict(color='green', width=1, dash='dash')
+        )
+        fig8.add_annotation(
+            x=stock_df['trade_date'].min(), y=75,
+            text='超买区(70)',
+            showarrow=False,
+            font=dict(color='red')
+        )
+        fig8.add_annotation(
+            x=stock_df['trade_date'].min(), y=25,
+            text='超卖区(30)',
+            showarrow=False,
+            font=dict(color='green')
+        )
+    
+    fig8.update_layout(
+        title=f'{stock_name} RSI指标',
+        xaxis_title='日期',
+        yaxis_title='RSI值',
+        legend_title='指标',
+        hovermode='x unified',
+        margin=dict(l=60, r=40, t=50, b=60),
+        height=300,
+        template='plotly_white'
+    )
+    
+    return fig1, fig2, fig3, fig4, fig5, fig6, fig7, fig8
 
 # 当点击预测按钮时执行
 if predict_button:
@@ -824,23 +1273,20 @@ if predict_button:
                 st.subheader("📉 数据分析与可视化")
                 st.markdown("**提示：所有图表都支持缩放、平移和悬停查看详细数据**")
                 
-                fig1, fig2, fig3, fig4, fig5 = create_visualizations(stock_df, stock_name)
+                fig1, fig2, fig3, fig4, fig5, fig6, fig7, fig8 = create_visualizations(stock_df, stock_name)
                 
                 # 使用两列布局显示主要图表
                 col1, col2 = st.columns(2)
                 
                 with col1:
                     # 创建可缩放的价格走势图
-                    with st.expander("价格走势图（点击展开/收起）", expanded=True):
+                    expander_col1, expander_col2 = st.columns([9, 1])
+                    with expander_col1:
+                        st.markdown("价格走势图（点击展开/收起）")
+                    with expander_col2:
+                        st.markdown(create_tooltip("", "展示股票的历史价格变化趋势，包括开盘价、收盘价、最高价和最低价，帮助投资者了解股票的长期表现。"), unsafe_allow_html=True)
+                    with st.expander("", expanded=True):
                         st.plotly_chart(fig1, use_container_width=True, config={
-                            'displayModeBar': True,
-                            'scrollZoom': True,
-                            'responsive': True
-                        })
-                    
-                    # 创建可缩放的涨跌幅分布图
-                    with st.expander("涨跌幅分布图（点击展开/收起）", expanded=False):
-                        st.plotly_chart(fig3, use_container_width=True, config={
                             'displayModeBar': True,
                             'scrollZoom': True,
                             'responsive': True
@@ -848,24 +1294,100 @@ if predict_button:
                 
                 with col2:
                     # 创建可缩放的K线图
-                    with st.expander("K线图（点击展开/收起）", expanded=True):
+                    expander_col1, expander_col2 = st.columns([9, 1])
+                    with expander_col1:
+                        st.markdown("K线图（点击展开/收起）")
+                    with expander_col2:
+                        st.markdown(create_tooltip("", "展示股票的开盘价、收盘价、最高价和最低价，通过蜡烛图形式直观展示价格波动和趋势变化。"), unsafe_allow_html=True)
+                    with st.expander("", expanded=True):
                         st.plotly_chart(fig5, use_container_width=True, config={
                             'displayModeBar': True,
                             'scrollZoom': True,
                             'responsive': True
                         })
-                    
+                
+                # 成交量图
+                expander_col1, expander_col2 = st.columns([9, 1])
+                with expander_col1:
+                    st.markdown("成交量图（点击展开/收起）")
+                with expander_col2:
+                    st.markdown(create_tooltip("", "展示股票的成交量变化，帮助分析市场活跃度和价格变动的有效性。通常成交量放大表示市场情绪强烈。"), unsafe_allow_html=True)
+                with st.expander("", expanded=True):
+                    st.plotly_chart(fig2, use_container_width=True, config={
+                        'displayModeBar': True,
+                        'scrollZoom': True,
+                        'responsive': True
+                    })
+                
+                # 使用两列布局显示辅助分析图表
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    # 创建可缩放的涨跌幅分布图
+                    expander_col1, expander_col2 = st.columns([9, 1])
+                    with expander_col1:
+                        st.markdown("涨跌幅分布图（点击展开/收起）")
+                    with expander_col2:
+                        st.markdown(create_tooltip("", "展示股票每日涨跌幅的分布情况，帮助投资者了解股票的波动性和风险特征。"), unsafe_allow_html=True)
+                    with st.expander("", expanded=False):
+                        st.plotly_chart(fig3, use_container_width=True, config={
+                            'displayModeBar': True,
+                            'scrollZoom': True,
+                            'responsive': True
+                        })
+                
+                with col2:
                     # 创建可缩放的波动率与涨跌幅关系图
-                    with st.expander("波动率与涨跌幅关系图（点击展开/收起）", expanded=False):
+                    expander_col1, expander_col2 = st.columns([9, 1])
+                    with expander_col1:
+                        st.markdown("波动率与涨跌幅关系图（点击展开/收起）")
+                    with expander_col2:
+                        st.markdown(create_tooltip("", "展示股票波动率与涨跌幅之间的关系，帮助投资者了解价格波动的风险和收益特征。"), unsafe_allow_html=True)
+                    with st.expander("", expanded=False):
                         st.plotly_chart(fig4, use_container_width=True, config={
                             'displayModeBar': True,
                             'scrollZoom': True,
                             'responsive': True
                         })
                 
-                # 成交量图单独一行显示
-                with st.expander("成交量图（点击展开/收起）", expanded=True):
-                    st.plotly_chart(fig2, use_container_width=True, config={
+                # 技术指标图表区域
+                st.markdown("### 📊 高级技术指标")
+                st.caption("技术指标是基于历史价格和成交量数据计算的统计工具，用于预测价格走势和市场趋势")
+                
+                # MACD指标
+                expander_col1, expander_col2 = st.columns([9, 1])
+                with expander_col1:
+                    st.markdown("MACD指标图（点击展开/收起）")
+                with expander_col2:
+                    st.markdown(create_tooltip("", "MACD指标用于判断价格趋势的强度、方向和反转信号。通过观察DIF与DEA的交叉（金叉/死叉）以及柱状图的变化来分析市场走势。"), unsafe_allow_html=True)
+                with st.expander("", expanded=False):
+                    st.plotly_chart(fig6, use_container_width=True, config={
+                        'displayModeBar': True,
+                        'scrollZoom': True,
+                        'responsive': True
+                    })
+                
+                # KDJ指标
+                expander_col1, expander_col2 = st.columns([9, 1])
+                with expander_col1:
+                    st.markdown("KDJ指标图（点击展开/收起）")
+                with expander_col2:
+                    st.markdown(create_tooltip("", "KDJ指标用于判断市场超买超卖状态。K、D、J三条线的交叉点结合20/80超买超卖线可以识别买卖信号。"), unsafe_allow_html=True)
+                with st.expander("", expanded=False):
+                    st.plotly_chart(fig7, use_container_width=True, config={
+                        'displayModeBar': True,
+                        'scrollZoom': True,
+                        'responsive': True
+                    })
+                
+                # RSI指标
+                expander_col1, expander_col2 = st.columns([9, 1])
+                with expander_col1:
+                    st.markdown("RSI指标图（点击展开/收起）")
+                with expander_col2:
+                    st.markdown(create_tooltip("", "RSI指标衡量市场买卖力量的强弱。取值范围0-100，70以上为超买区，30以下为超卖区，用于识别价格反转信号。"), unsafe_allow_html=True)
+                with st.expander("", expanded=False):
+                    st.plotly_chart(fig8, use_container_width=True, config={
                         'displayModeBar': True,
                         'scrollZoom': True,
                         'responsive': True
@@ -911,7 +1433,29 @@ if predict_button:
                                 st.metric("预测置信度", f"{confidence_emoji} {prediction_result.get('confidence', '中')}")
                             with col_info:
                                 st.info("置信度基于历史数据趋势分析和模式识别，越高表示预测可靠性越强")
-                              
+                               
+                            # 显示上涨下跌概率
+                            st.subheader('涨跌概率分析')
+                            # 基于历史数据计算上涨概率
+                            historical_changes = stock_df['pct_chg']
+                            up_days = len(historical_changes[historical_changes > 0])
+                            down_days = len(historical_changes[historical_changes < 0])
+                            total_days = len(historical_changes)
+                            
+                            # 计算概率
+                            up_probability = round(up_days / total_days * 100, 2) if total_days > 0 else 50
+                            down_probability = round(down_days / total_days * 100, 2) if total_days > 0 else 50
+                            flat_probability = round(100 - up_probability - down_probability, 2) if total_days > 0 else 0
+                            
+                            col_prob1, col_prob2, col_prob3 = st.columns(3)
+                            with col_prob1:
+                                st.metric(label="上涨概率", value=f"{up_probability}%")
+                            with col_prob2:
+                                st.metric(label="下跌概率", value=f"{down_probability}%")
+                            with col_prob3:
+                                st.metric(label="持平概率", value=f"{flat_probability}%")
+                            st.caption("基于历史数据统计得出的概率分布")
+                               
                             # 显示预测详情
                             if 'predictions' in prediction_result and prediction_result['predictions']:
                                 st.markdown("### 📅 未来预测")
@@ -938,13 +1482,37 @@ if predict_button:
                                         current_date += timedelta(days=1)
                                       
                                     future_dates.append(current_date.strftime('%Y-%m-%d'))
-                                    # 简单模拟预测结果
-                                    if recent_trend == '上涨' and i < 2:
-                                        future_predictions.append('上涨')
-                                    elif recent_trend == '下跌' and i < 2:
-                                        future_predictions.append('下跌')
+                                    # 计算上涨下跌概率
+                                    # 基于历史数据计算上涨概率
+                                    historical_changes = stock_df['pct_chg']
+                                    up_days = len(historical_changes[historical_changes > 0])
+                                    down_days = len(historical_changes[historical_changes < 0])
+                                    total_days = len(historical_changes)
+                                    
+                                    # 计算概率
+                                    up_probability = round(up_days / total_days * 100, 2) if total_days > 0 else 50
+                                    down_probability = round(down_days / total_days * 100, 2) if total_days > 0 else 50
+                                    flat_probability = round(100 - up_probability - down_probability, 2) if total_days > 0 else 0
+                                    
+                                    # 简单模拟预测结果，考虑概率
+                                    prediction_probs = {
+                                        '上涨': up_probability,
+                                        '下跌': down_probability,
+                                        '持平': flat_probability
+                                    }
+                                    
+                                    # 根据概率生成预测
+                                    if i < 2:
+                                        # 前几天考虑最近趋势
+                                        if recent_trend == '上涨':
+                                            future_predictions.append('上涨')
+                                        elif recent_trend == '下跌':
+                                            future_predictions.append('下跌')
+                                        else:
+                                            future_predictions.append(np.random.choice(list(prediction_probs.keys()), p=[up_probability/100, down_probability/100, flat_probability/100]))
                                     else:
-                                        future_predictions.append(np.random.choice(['上涨', '下跌', '持平']))
+                                        # 后面几天基于概率随机选择
+                                        future_predictions.append(np.random.choice(list(prediction_probs.keys()), p=[up_probability/100, down_probability/100, flat_probability/100]))
                                  
                                 # 创建预测数据框
                                 pred_df = pd.DataFrame({
