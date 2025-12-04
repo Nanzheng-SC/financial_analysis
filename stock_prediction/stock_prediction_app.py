@@ -247,7 +247,7 @@ def predict_stock_trend(stock_df, stock_name, stock_code, prediction_days):
           "risk_warning": "风险提示"
         """
         
-        # 使用OpenAI客户端调用豆包API（根据官方教程）
+        # 使用OpenAI客户端调用豆包API
         api_key = os.getenv('Doubao_API_KEY')
         base_url = "https://ark.cn-beijing.volces.com/api/v3"
         
