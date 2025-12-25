@@ -38,8 +38,8 @@ car_df = (
     .rename(columns={"cny_ret": "CAR"})
 )
 
-print("\n=== 事件CAR计算结果（前5行）===")
-print(car_df.head())
+print("\n=== 事件CAR计算结果（随机5行）===")
+print(car_df.sample(5))
 
 # 按事件类型分组，准备 ANOVA 的输入列表
 groups = [

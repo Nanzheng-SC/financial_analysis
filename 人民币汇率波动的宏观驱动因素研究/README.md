@@ -12,7 +12,7 @@
 │   ├── Fred_data_scraping.py     # FRED数据获取脚本
 │   ├── china_CPI_month.csv       # 中国CPI月度数据
 │   ├── china_PMI_month.csv       # 中国PMI月度数据
-│   ├── event_list_v1.csv         # 事件列表
+│   ├── event_list_v2.csv         # 事件列表
 │   ├── fred_raw_data.csv         # FRED原始数据
 │   ├── master_data.csv           # 合并后的主数据
 │   └── master_data_processing.ipynb  # 数据处理 notebook

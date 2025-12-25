@@ -34,7 +34,7 @@ df["cny_ret"] = np.log(df["CNY_USD"] / df["CNY_USD"].shift(1))
 # 3. 读取事件表
 # ===============================
 events = pd.read_csv(
-    os.path.join(DATA_DIR, "event_list_v1.csv"),
+    os.path.join(DATA_DIR, "event_list_v2.csv"),
     parse_dates=["event_date"]
 )
 
